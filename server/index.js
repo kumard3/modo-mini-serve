@@ -1,6 +1,6 @@
 import express from "express";
 import http from "http";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import path from "path";
 import { fileURLToPath } from "url";
 import LxCommunicator from "lxcommunicator";
@@ -17,7 +17,8 @@ const uuidOfLightControl = "1b394017-00e9-71fe-ffffcb0481ff57c7";
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-function sendLogToClients(message) {
+function log(message) {
+  console.log(message);
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(JSON.stringify({ type: "log", message }));
@@ -25,32 +26,29 @@ function sendLogToClients(message) {
   });
 }
 
-// Override console.log and console.error to send logs to clients
-const originalLog = console.log;
-const originalError = console.error;
-
-console.log = (...args) => {
-  originalLog(...args);
-  sendLogToClients(args.join(" "));
-};
-
-console.error = (...args) => {
-  originalError(...args);
-  sendLogToClients(`ERROR: ${args.join(" ")}`);
-};
-
 wss.on("connection", (ws) => {
-  console.log("WebSocket connection established");
+  log("WebSocket connection established");
+
+  // Send initial light status
+  ws.send(JSON.stringify({ type: "status", lightStatus: isLightOn }));
+  log(`Initial light status sent: ${isLightOn ? "On" : "Off"}`);
 
   ws.on("message", async (message) => {
     const command = message.toString();
-    console.log("Received message from client:", command);
+    log(`Received message from client: ${command}`);
     if (command === "toggleLight") {
       try {
         const status = await toggleLight();
-        ws.send(JSON.stringify({ type: "status", lightStatus: status }));
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(
+              JSON.stringify({ type: "status", lightStatus: status })
+            );
+          }
+        });
+        log(`Light toggled: ${status ? "On" : "Off"}`);
       } catch (error) {
-        console.error("Error while toggling light:", error);
+        log(`Error while toggling light: ${error.message}`);
         ws.send(
           JSON.stringify({ type: "error", message: "Failed to toggle light" })
         );
@@ -58,11 +56,8 @@ wss.on("connection", (ws) => {
     }
   });
 
-  ws.on("close", () => console.log("WebSocket connection closed"));
-  ws.on("error", (error) => console.error("WebSocket error:", error));
-
-  // Send initial light status
-  ws.send(JSON.stringify({ type: "status", lightStatus: isLightOn }));
+  ws.on("close", () => log("WebSocket connection closed"));
+  ws.on("error", (error) => log(`WebSocket error: ${error.message}`));
 });
 
 async function toggleLight() {
@@ -72,7 +67,7 @@ async function toggleLight() {
     isLightOn = !isLightOn;
     return isLightOn;
   } catch (error) {
-    console.error("Failed to toggle light:", error);
+    log(`Failed to toggle light: ${error.message}`);
     throw error;
   }
 }
@@ -93,7 +88,7 @@ async function sendCommand(uuid, command) {
     const response = await socket.send(`jdev/sps/io/${uuid}/${command}`);
 
     if (response.LL && response.LL.Code === "200") {
-      console.log("Command sent successfully");
+      log("Command sent successfully");
     } else {
       throw new Error(
         "Command failed with response code: " +
@@ -114,8 +109,7 @@ if (process.env.NODE_ENV === "production") {
   app.get("/", (req, res) => res.send("Hello from the server"));
 }
 
-// Use the HTTP server to listen on the port instead of the Express app
 server.listen(port, () => {
-  console.log(`Server running on http://localhost:${port}`);
-  console.log(`WebSocket server running on ws://localhost:${port}`);
+  log(`Server running on http://localhost:${port}`);
+  log(`WebSocket server running on ws://localhost:${port}`);
 });
